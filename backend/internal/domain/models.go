@@ -1,19 +1,23 @@
 package domain
 
 type Room struct {
-	ID            string `json:"id"`
-	Title         string `json:"title"`
-	Currency      string `json:"currency"`
-	ServiceFee    int64  `json:"service_fee"`
-	TipAmount     int64  `json:"tip_amount"`
-	Discount      int64  `json:"discount"`
-	ExpectedTotal int64  `json:"expected_total"`
+	ID                 string `json:"id"`
+	Title              string `json:"title"`
+	Currency           string `json:"currency"`
+	ServiceFee         int64  `json:"service_fee"`
+	TipAmount          int64  `json:"tip_amount"`
+	Discount           int64  `json:"discount"`
+	ExpectedTotal      int64  `json:"expected_total"`
+	PayerParticipantID string `json:"payer_participant_id"`
+	AdminToken         string `json:"-"`
 }
 
 type Participant struct {
-	ID     string `json:"id"`
-	RoomID string `json:"room_id"`
-	Name   string `json:"name"`
+	ID          string `json:"id"`
+	RoomID      string `json:"room_id"`
+	Name        string `json:"name"`
+	Claimed     bool   `json:"claimed"`
+	AccessToken string `json:"-"`
 }
 
 type ReceiptItem struct {

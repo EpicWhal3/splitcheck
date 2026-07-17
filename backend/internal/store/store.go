@@ -10,6 +10,7 @@ var (
 	ErrorNotFound            = errors.New("not found")
 	ErrorItemNotFound        = errors.New("item not found")
 	ErrorParticipantNotFound = errors.New("participant not found")
+	ErrorNameTaken           = errors.New("paricipant name as already taken")
 )
 
 type Store interface {
@@ -18,6 +19,8 @@ type Store interface {
 	UpdateRoom(room domain.Room) (domain.Room, error)
 
 	AddParticipant(roomID string, participant domain.Participant) (domain.Participant, error)
+	JoinParticipant(roomID string, name string) (domain.Participant, error)
+	FindParticipantByToken(roomID string, token string) (domain.Participant, error)
 	ListParticipants(roomID string) ([]domain.Participant, error)
 	UpdateParticipant(roomID string, participant domain.Participant) (domain.Participant, error)
 	DeleteParticipant(roomID string, participantID string) error

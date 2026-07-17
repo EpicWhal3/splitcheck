@@ -6,10 +6,17 @@ import (
 )
 
 func newID() string {
-	bytes := make([]byte, 8)
+	return randomHex(8)
+}
 
-	_, err := rand.Read(bytes)
-	if err != nil {
+func newToken() string {
+	return randomHex(32)
+}
+
+func randomHex(size int) string {
+	bytes := make([]byte, size)
+
+	if _, err := rand.Read(bytes); err != nil {
 		panic(err)
 	}
 

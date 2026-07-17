@@ -2,6 +2,7 @@ package store
 
 import (
 	"splitthebill/backend/internal/domain"
+	"strings"
 	"sync"
 )
 
@@ -28,6 +29,10 @@ func (s *MemoryStore) CreateRoom(room domain.Room) (domain.Room, error) {
 	defer s.mu.Unlock()
 
 	room.ID = newID()
+	if room.AdminToken == "" {
+		room.AdminToken = newToken()
+	}
+
 	s.rooms[room.ID] = room
 	s.participants[room.ID] = []domain.Participant{}
 	s.items[room.ID] = []domain.ReceiptItem{}
@@ -51,8 +56,12 @@ func (s *MemoryStore) UpdateRoom(room domain.Room) (domain.Room, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.rooms[room.ID]; !ok {
+	existing, ok := s.rooms[room.ID]
+	if !ok {
 		return domain.Room{}, ErrorNotFound
+	}
+	if room.AdminToken == "" {
+		room.AdminToken = existing.AdminToken
 	}
 	s.rooms[room.ID] = room
 	return room, nil
@@ -69,11 +78,78 @@ func (s *MemoryStore) AddParticipant(
 		return domain.Participant{}, ErrorNotFound
 	}
 
+	if s.participantNameExists(roomID, participant.Name, "") {
+		return domain.Participant{}, ErrorNameTaken
+	}
+
 	participant.ID = newID()
 	participant.RoomID = roomID
+	participant.Claimed = participant.AccessToken != ""
+
+	s.participants[roomID] = append(
+		s.participants[roomID],
+		participant,
+	)
+
+	return participant, nil
+}
+
+func (s *MemoryStore) JoinParticipant(roomID string, name string) (domain.Participant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.rooms[roomID]; !ok {
+		return domain.Participant{}, ErrorNotFound
+	}
+
+	participants := s.participants[roomID]
+	for i, participant := range participants {
+		if !strings.EqualFold(strings.TrimSpace(participant.Name), strings.TrimSpace(name)) {
+			continue
+		}
+
+		if participant.AccessToken != "" {
+			return domain.Participant{}, ErrorNameTaken
+		}
+
+		participant.AccessToken = newToken()
+		participant.Claimed = true
+		participants[i] = participant
+		s.participants[roomID] = participants
+
+		return participant, nil
+	}
+
+	participant := domain.Participant{
+		ID:          newID(),
+		RoomID:      roomID,
+		Name:        name,
+		Claimed:     true,
+		AccessToken: newToken(),
+	}
 
 	s.participants[roomID] = append(s.participants[roomID], participant)
 	return participant, nil
+}
+
+func (s *MemoryStore) FindParticipantByToken(
+	roomID string,
+	token string,
+) (domain.Participant, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if _, ok := s.rooms[roomID]; !ok {
+		return domain.Participant{}, ErrorNotFound
+	}
+
+	for _, participant := range s.participants[roomID] {
+		if token != "" && participant.AccessToken == token {
+			return participant, nil
+		}
+	}
+
+	return domain.Participant{}, ErrorParticipantNotFound
 }
 
 func (s *MemoryStore) ListParticipants(
@@ -102,15 +178,26 @@ func (s *MemoryStore) UpdateParticipant(
 		return domain.Participant{}, ErrorNotFound
 	}
 
+	if s.participantNameExists(
+		roomID,
+		participant.Name,
+		participant.ID,
+	) {
+		return domain.Participant{}, ErrorNameTaken
+	}
+
 	participants := s.participants[roomID]
 
 	for i, existing := range participants {
-		if existing.ID == participant.ID {
-			participant.RoomID = roomID
-			participants[i] = participant
-			s.participants[roomID] = participants
-			return participant, nil
+		if existing.ID != participant.ID {
+			continue
 		}
+
+		existing.Name = participant.Name
+		participants[i] = existing
+		s.participants[roomID] = participants
+
+		return existing, nil
 	}
 
 	return domain.Participant{}, ErrorParticipantNotFound
@@ -123,7 +210,8 @@ func (s *MemoryStore) DeleteParticipant(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.rooms[roomID]; !ok {
+	room, ok := s.rooms[roomID]
+	if !ok {
 		return ErrorNotFound
 	}
 
@@ -155,7 +243,6 @@ func (s *MemoryStore) DeleteParticipant(
 	s.participants[roomID] = filteredParticipants
 
 	assignments := s.assignments[roomID]
-
 	filteredAssignments := make(
 		[]domain.ItemAssignment,
 		0,
@@ -172,6 +259,11 @@ func (s *MemoryStore) DeleteParticipant(
 	}
 
 	s.assignments[roomID] = filteredAssignments
+
+	if room.PayerParticipantID == participantID {
+		room.PayerParticipantID = ""
+		s.rooms[roomID] = room
+	}
 
 	return nil
 }
@@ -396,6 +488,27 @@ func (s *MemoryStore) itemExists(
 ) bool {
 	for _, item := range s.items[roomID] {
 		if item.ID == itemID {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (s *MemoryStore) participantNameExists(
+	roomID string,
+	name string,
+	excludeParticipantID string,
+) bool {
+	for _, participant := range s.participants[roomID] {
+		if participant.ID == excludeParticipantID {
+			continue
+		}
+
+		if strings.EqualFold(
+			strings.TrimSpace(participant.Name),
+			strings.TrimSpace(name),
+		) {
 			return true
 		}
 	}
