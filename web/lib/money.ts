@@ -1,16 +1,21 @@
-export function parseMoneyToMinorUnits(value: string): number {
+export function tryParseMoneyToMinorUnits(value: string): number | null {
   const normalized = value.replace(",", ".").trim();
 
   if (!normalized) {
-    return 0;
+    return null;
   }
 
   const numberValue = Number(normalized);
-  if (Number.isNaN(numberValue)) {
-    return 0;
+
+  if (!Number.isFinite(numberValue)) {
+    return null;
   }
 
   return Math.round(numberValue * 100);
+}
+
+export function parseMoneyToMinorUnits(value: string): number {
+  return tryParseMoneyToMinorUnits(value) ?? 0;
 }
 
 export function formatMoney(amount: number, currency: string): string {

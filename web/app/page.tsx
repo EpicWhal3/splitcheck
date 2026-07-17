@@ -1,19 +1,22 @@
 "use client";
 
-import { useState, type SubmitEvent } from "react";
+import { useState, type FormEvent } from "react";
+
 import { useRouter } from "next/navigation";
+
 import { createRoom } from "../lib/api";
 
 export default function HomePage() {
   const router = useRouter();
 
-  const [title, setTitle] = useState("Dinner at Bar");
+  const [title, setTitle] = useState("Ужин с друзьями");
+
   const [currency, setCurrency] = useState("EUR");
 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleCreateRoom(event: SubmitEvent<HTMLFormElement>) {
+  async function handleCreateRoom(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setError("");
@@ -21,7 +24,7 @@ export default function HomePage() {
 
     try {
       const room = await createRoom({
-        title,
+        title: title.trim(),
         currency,
       });
 
@@ -36,6 +39,7 @@ export default function HomePage() {
   return (
     <main>
       <h1>SplitTheBill</h1>
+
       <p className="muted">
         Создай комнату счёта, добавь позиции и раздели их между участниками.
       </p>
@@ -49,7 +53,8 @@ export default function HomePage() {
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
-              placeholder="Dinner at Bar"
+              placeholder="Ужин с друзьями"
+              maxLength={120}
             />
           </label>
 
@@ -65,6 +70,7 @@ export default function HomePage() {
               <option value="GBP">GBP</option>
             </select>
           </label>
+
           {error && <p className="error">{error}</p>}
 
           <button type="submit" disabled={loading || !title.trim()}>
