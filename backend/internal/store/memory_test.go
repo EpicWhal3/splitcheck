@@ -1,135 +1,106 @@
 package store
 
 import (
+	"errors"
 	"testing"
 
 	"splitthebill/backend/internal/domain"
 )
 
-func TestMemoryStoreCRUDAndAssignmentCascade(
-	t *testing.T,
-) {
-	store := NewMemoryStore()
+func TestMemoryStoreCollaborationFlow(t *testing.T) {
+	appStore := NewMemoryStore()
 
-	room, err := store.CreateRoom(
-		domain.Room{
-			Title:    "Dinner",
-			Currency: "EUR",
-		},
+	room, err := appStore.CreateRoom(domain.Room{
+		Title:    "Dinner",
+		Currency: "EUR",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if room.AdminToken == "" {
+		t.Fatal("expected admin token")
+	}
+
+	participant, err := appStore.AddParticipant(
+		room.ID,
+		domain.Participant{Name: "Аня"},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	participant, err := store.AddParticipant(
-		room.ID,
-		domain.Participant{
-			Name: "Аня",
-		},
-	)
+	if participant.Claimed {
+		t.Fatal("organizer-created participant must be unclaimed")
+	}
+
+	joined, err := appStore.JoinParticipant(room.ID, "аня")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	item, err := store.AddItem(
-		room.ID,
-		domain.ReceiptItem{
-			Name:      "Pizza",
-			Quantity:  1,
-			UnitPrice: 1000,
-			Total:     1000,
-		},
-	)
+	if !joined.Claimed || joined.AccessToken == "" {
+		t.Fatal("joined participant must receive a token")
+	}
+
+	if joined.ID != participant.ID {
+		t.Fatalf("expected existing participant %s to be claimed, got %s", participant.ID, joined.ID)
+	}
+
+	_, err = appStore.JoinParticipant(room.ID, "Аня")
+	if !errors.Is(err, ErrorNameTaken) {
+		t.Fatalf("expected ErrorNameTaken, got %v", err)
+	}
+
+	found, err := appStore.FindParticipantByToken(room.ID, joined.AccessToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found.ID != joined.ID {
+		t.Fatalf("expected participant %s, got %s", joined.ID, found.ID)
+	}
+
+	item, err := appStore.AddItem(room.ID, domain.ReceiptItem{
+		Name:      "Pizza",
+		Quantity:  1,
+		UnitPrice: 1000,
+		Total:     1000,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = store.AddAssignment(
-		room.ID,
-		domain.ItemAssignment{
-			ItemID:        item.ID,
-			ParticipantID: participant.ID,
-			Weight:        1,
-		},
-	)
+	_, err = appStore.AddAssignment(room.ID, domain.ItemAssignment{
+		ItemID:        item.ID,
+		ParticipantID: joined.ID,
+		Weight:        1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	participant.Name = "Анна"
+	room.PayerParticipantID = joined.ID
+	if _, err := appStore.UpdateRoom(room); err != nil {
+		t.Fatal(err)
+	}
 
-	updatedParticipant, err :=
-		store.UpdateParticipant(
-			room.ID,
-			participant,
-		)
+	if err := appStore.DeleteParticipant(room.ID, joined.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	updatedRoom, err := appStore.GetRoom(room.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if updatedParticipant.Name != "Анна" {
-		t.Fatalf(
-			"expected updated name, got %q",
-			updatedParticipant.Name,
-		)
+	if updatedRoom.PayerParticipantID != "" {
+		t.Fatal("payer must be cleared when participant is deleted")
 	}
 
-	item.Name = "Large Pizza"
-	item.Quantity = 2
-	item.UnitPrice = 750
-	item.Total = 1500
-
-	updatedItem, err := store.UpdateItem(
-		room.ID,
-		item,
-	)
+	assignments, err := appStore.ListAssignments(room.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if updatedItem.Total != 1500 {
-		t.Fatalf(
-			"expected updated total, got %d",
-			updatedItem.Total,
-		)
-	}
-
-	if err := store.DeleteParticipant(
-		room.ID,
-		participant.ID,
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	assignments, err :=
-		store.ListAssignments(room.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	if len(assignments) != 0 {
-		t.Fatalf(
-			"expected assignments to be deleted with participant, got %#v",
-			assignments,
-		)
-	}
-
-	if err := store.DeleteItem(
-		room.ID,
-		item.ID,
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	items, err := store.ListItems(room.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(items) != 0 {
-		t.Fatalf(
-			"expected item to be deleted, got %#v",
-			items,
-		)
+		t.Fatalf("participant deletion must cascade assignments, got %#v", assignments)
 	}
 }

@@ -11,13 +11,21 @@ import (
 	"splitthebill/backend/internal/store"
 )
 
-func TestRoomCRUDAndCalculation(
-	t *testing.T,
-) {
+type createRoomResponse struct {
+	Room       domain.Room `json:"room"`
+	AdminToken string      `json:"admin_token"`
+}
+
+type joinResponse struct {
+	Participant      domain.Participant `json:"participant"`
+	ParticipantToken string             `json:"participant_token"`
+}
+
+func TestCollaborativeRoomFlow(t *testing.T) {
 	memoryStore := store.NewMemoryStore()
 	handler := NewHandler(memoryStore)
 
-	room := doJSON[domain.Room](
+	created := doJSON[createRoomResponse](
 		t,
 		handler,
 		http.MethodPost,
@@ -27,198 +35,135 @@ func TestRoomCRUDAndCalculation(
 			"currency":       "EUR",
 			"expected_total": 1000,
 		},
+		nil,
 		http.StatusCreated,
+	)
+
+	if created.AdminToken == "" {
+		t.Fatal("expected admin token")
+	}
+
+	doJSON[map[string]string](
+		t,
+		handler,
+		http.MethodPost,
+		"/rooms/"+created.Room.ID+"/participants",
+		map[string]any{"name": "Аня"},
+		nil,
+		http.StatusForbidden,
 	)
 
 	participant := doJSON[domain.Participant](
 		t,
 		handler,
 		http.MethodPost,
-		"/rooms/"+room.ID+"/participants",
-		map[string]any{
-			"name": "Аня",
-		},
+		"/rooms/"+created.Room.ID+"/participants",
+		map[string]any{"name": "Аня"},
+		map[string]string{"X-Admin-Token": created.AdminToken},
 		http.StatusCreated,
 	)
 
-	participant = doJSON[domain.Participant](
+	joined := doJSON[joinResponse](
 		t,
 		handler,
-		http.MethodPatch,
-		"/rooms/"+room.ID+
-			"/participants/"+
-			participant.ID,
-		map[string]any{
-			"name": "Анна",
-		},
-		http.StatusOK,
+		http.MethodPost,
+		"/rooms/"+created.Room.ID+"/join",
+		map[string]any{"name": "аня"},
+		nil,
+		http.StatusCreated,
 	)
 
-	if participant.Name != "Анна" {
-		t.Fatalf(
-			"expected updated participant name, got %q",
-			participant.Name,
-		)
+	if joined.Participant.ID != participant.ID || joined.ParticipantToken == "" {
+		t.Fatalf("unexpected join response: %#v", joined)
 	}
 
 	item := doJSON[domain.ReceiptItem](
 		t,
 		handler,
 		http.MethodPost,
-		"/rooms/"+room.ID+"/items",
+		"/rooms/"+created.Room.ID+"/items",
 		map[string]any{
 			"name":       "Pizza",
 			"quantity":   1,
 			"unit_price": 1000,
 		},
+		map[string]string{"X-Admin-Token": created.AdminToken},
 		http.StatusCreated,
 	)
 
-	item = doJSON[domain.ReceiptItem](
+	selection := doJSON[domain.ItemAssignment](
 		t,
 		handler,
-		http.MethodPatch,
-		"/rooms/"+room.ID+
-			"/items/"+
-			item.ID,
-		map[string]any{
-			"name": "Large Pizza",
-		},
+		http.MethodPut,
+		"/rooms/"+created.Room.ID+"/selections/"+item.ID,
+		nil,
+		map[string]string{"X-Participant-Token": joined.ParticipantToken},
 		http.StatusOK,
 	)
 
-	if item.Name != "Large Pizza" ||
-		item.Total != 1000 {
-		t.Fatalf(
-			"unexpected updated item: %#v",
-			item,
-		)
+	if selection.ParticipantID != participant.ID || selection.ItemID != item.ID {
+		t.Fatalf("unexpected selection: %#v", selection)
 	}
 
-	doJSON[domain.ItemAssignment](
+	updatedRoom := doJSON[domain.Room](
 		t,
 		handler,
-		http.MethodPost,
-		"/rooms/"+room.ID+"/assignments",
-		map[string]any{
-			"item_id":        item.ID,
-			"participant_id": participant.ID,
-			"weight":         1,
-		},
-		http.StatusCreated,
+		http.MethodPatch,
+		"/rooms/"+created.Room.ID,
+		map[string]any{"payer_participant_id": participant.ID},
+		map[string]string{"X-Admin-Token": created.AdminToken},
+		http.StatusOK,
 	)
 
+	if updatedRoom.PayerParticipantID != participant.ID {
+		t.Fatalf("expected payer %s, got %s", participant.ID, updatedRoom.PayerParticipantID)
+	}
+
 	calculation := doJSON[struct {
-		Subtotal int64 `json:"subtotal"`
-
-		CalculatedTotal int64 `json:"calculated_total"`
-
-		Difference int64 `json:"difference"`
-
-		MatchesExpectedTotal bool `json:"matches_expected_total"`
+		CalculatedTotal      int64 `json:"calculated_total"`
+		Difference           int64 `json:"difference"`
+		MatchesExpectedTotal bool  `json:"matches_expected_total"`
 	}](
 		t,
 		handler,
 		http.MethodPost,
-		"/rooms/"+room.ID+"/calculate",
+		"/rooms/"+created.Room.ID+"/calculate",
+		nil,
 		nil,
 		http.StatusOK,
 	)
 
-	if calculation.Subtotal != 1000 ||
-		calculation.CalculatedTotal != 1000 ||
-		calculation.Difference != 0 ||
-		!calculation.MatchesExpectedTotal {
-		t.Fatalf(
-			"unexpected calculation response: %#v",
-			calculation,
-		)
+	if calculation.CalculatedTotal != 1000 || calculation.Difference != 0 || !calculation.MatchesExpectedTotal {
+		t.Fatalf("unexpected calculation: %#v", calculation)
 	}
 
 	doNoContent(
 		t,
 		handler,
 		http.MethodDelete,
-		"/rooms/"+room.ID+
-			"/participants/"+
-			participant.ID,
+		"/rooms/"+created.Room.ID+"/selections/"+item.ID,
+		map[string]string{"X-Participant-Token": joined.ParticipantToken},
 	)
-
-	assignments, err :=
-		memoryStore.ListAssignments(room.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(assignments) != 0 {
-		t.Fatalf(
-			"participant deletion must cascade assignments, got %#v",
-			assignments,
-		)
-	}
 }
 
-func TestCalculateReportsExpectedTotalDifference(
-	t *testing.T,
-) {
+func TestParticipantCanOnlyUseValidSession(t *testing.T) {
 	memoryStore := store.NewMemoryStore()
 	handler := NewHandler(memoryStore)
 
-	room, _ := memoryStore.CreateRoom(
-		domain.Room{
-			Title:         "Dinner",
-			Currency:      "EUR",
-			ExpectedTotal: 1200,
-		},
-	)
+	room, _ := memoryStore.CreateRoom(domain.Room{Title: "Dinner", Currency: "EUR"})
+	item, _ := memoryStore.AddItem(room.ID, domain.ReceiptItem{
+		Name: "Pizza", Quantity: 1, UnitPrice: 1000, Total: 1000,
+	})
 
-	participant, _ :=
-		memoryStore.AddParticipant(
-			room.ID,
-			domain.Participant{
-				Name: "A",
-			},
-		)
-
-	item, _ := memoryStore.AddItem(
-		room.ID,
-		domain.ReceiptItem{
-			Name:      "Pizza",
-			Quantity:  1,
-			UnitPrice: 1000,
-			Total:     1000,
-		},
-	)
-
-	_, _ = memoryStore.AddAssignment(
-		room.ID,
-		domain.ItemAssignment{
-			ItemID:        item.ID,
-			ParticipantID: participant.ID,
-			Weight:        1,
-		},
-	)
-
-	calculation := doJSON[struct {
-		Difference int64 `json:"difference"`
-
-		MatchesExpectedTotal bool `json:"matches_expected_total"`
-	}](
+	doJSON[map[string]string](
 		t,
 		handler,
-		http.MethodPost,
-		"/rooms/"+room.ID+"/calculate",
+		http.MethodPut,
+		"/rooms/"+room.ID+"/selections/"+item.ID,
 		nil,
-		http.StatusOK,
+		map[string]string{"X-Participant-Token": "invalid"},
+		http.StatusUnauthorized,
 	)
-
-	if calculation.Difference != -200 ||
-		calculation.MatchesExpectedTotal {
-		t.Fatalf(
-			"unexpected expected-total comparison: %#v",
-			calculation,
-		)
-	}
 }
 
 func doNoContent(
@@ -226,28 +171,20 @@ func doNoContent(
 	handler http.Handler,
 	method string,
 	path string,
+	headers map[string]string,
 ) {
 	t.Helper()
 
-	req := httptest.NewRequest(
-		method,
-		path,
-		nil,
-	)
+	req := httptest.NewRequest(method, path, nil)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
 
 	res := httptest.NewRecorder()
-
 	handler.ServeHTTP(res, req)
 
 	if res.Code != http.StatusNoContent {
-		t.Fatalf(
-			"%s %s: expected status %d, got %d: %s",
-			method,
-			path,
-			http.StatusNoContent,
-			res.Code,
-			res.Body.String(),
-		)
+		t.Fatalf("%s %s: expected status %d, got %d: %s", method, path, http.StatusNoContent, res.Code, res.Body.String())
 	}
 }
 
@@ -257,12 +194,12 @@ func doJSON[T any](
 	method string,
 	path string,
 	body any,
+	headers map[string]string,
 	expectedStatus int,
 ) T {
 	t.Helper()
 
 	var requestBody *bytes.Reader
-
 	if body == nil {
 		requestBody = bytes.NewReader(nil)
 	} else {
@@ -270,47 +207,31 @@ func doJSON[T any](
 		if err != nil {
 			t.Fatal(err)
 		}
-
 		requestBody = bytes.NewReader(data)
 	}
 
-	req := httptest.NewRequest(
-		method,
-		path,
-		requestBody,
-	)
-
-	req.Header.Set(
-		"Content-Type",
-		"application/json",
-	)
+	req := httptest.NewRequest(method, path, requestBody)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
 
 	res := httptest.NewRecorder()
-
 	handler.ServeHTTP(res, req)
 
 	if res.Code != expectedStatus {
-		t.Fatalf(
-			"%s %s: expected status %d, got %d: %s",
-			method,
-			path,
-			expectedStatus,
-			res.Code,
-			res.Body.String(),
-		)
+		t.Fatalf("%s %s: expected status %d, got %d: %s", method, path, expectedStatus, res.Code, res.Body.String())
 	}
 
 	var result T
+	if res.Body.Len() == 0 {
+		return result
+	}
 
-	if err := json.Unmarshal(
-		res.Body.Bytes(),
-		&result,
-	); err != nil {
-		t.Fatalf(
-			"decode response: %v; body=%s",
-			err,
-			res.Body.String(),
-		)
+	if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, res.Body.String())
 	}
 
 	return result

@@ -1,34 +1,34 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
-
+import { useState, type SubmitEvent } from "react";
 import { useRouter } from "next/navigation";
 
 import { createRoom } from "../lib/api";
+import { saveAdminToken } from "../lib/session";
 
 export default function HomePage() {
   const router = useRouter();
 
   const [title, setTitle] = useState("Ужин с друзьями");
-
-  const [currency, setCurrency] = useState("EUR");
-
+  const [currency, setCurrency] = useState("RUB");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleCreateRoom(event: FormEvent<HTMLFormElement>) {
+  async function handleCreateRoom(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setError("");
     setLoading(true);
 
     try {
-      const room = await createRoom({
+      const result = await createRoom({
         title: title.trim(),
         currency,
       });
 
-      router.push(`/rooms/${room.id}`);
+      saveAdminToken(result.room.id, result.admin_token);
+
+      router.push(`/rooms/${result.room.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка создания комнаты");
     } finally {
@@ -37,15 +37,20 @@ export default function HomePage() {
   }
 
   return (
-    <main>
-      <h1>SplitTheBill</h1>
+    <main className="landing">
+      <section className="hero">
+        <p className="eyebrow">Совместное деление счёта</p>
 
-      <p className="muted">
-        Создай комнату счёта, добавь позиции и раздели их между участниками.
-      </p>
+        <h1>SplitTheBill</h1>
 
-      <section className="card">
-        <h2>Создать счёт</h2>
+        <p className="hero-text">
+          Создай комнату, добавь позиции из чека и отправь друзьям одну ссылку.
+          Каждый отметит свои блюда сам.
+        </p>
+      </section>
+
+      <section className="card create-card">
+        <h2>Создать комнату</h2>
 
         <form onSubmit={handleCreateRoom} className="grid">
           <label>
